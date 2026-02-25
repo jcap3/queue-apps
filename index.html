@@ -1,0 +1,742 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Pickup Queue 🏀</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  body { background: #0f0f0f; color: #e8e8e8; font-family: -apple-system, 'Inter', sans-serif; padding: 16px; max-width: 480px; margin: 0 auto; min-height: 100vh; min-height: 100dvh; }
+  .header { text-align: center; margin-bottom: 24px; }
+  .header h1 { font-size: 22px; font-weight: 700; color: #fff; letter-spacing: -0.5px; }
+  .header p { font-size: 13px; color: #888; margin-top: 4px; }
+  .stats { display: flex; gap: 8px; margin-bottom: 16px; }
+  .stat { flex: 1; background: #1a1a1a; border-radius: 10px; padding: 10px 8px; text-align: center; border: 1px solid #2a2a2a; }
+  .stat-val { font-size: 20px; font-weight: 700; }
+  .stat-label { font-size: 11px; color: #666; margin-top: 2px; }
+  .add-row { display: flex; gap: 8px; margin-bottom: 20px; }
+  .add-row input { flex: 1; background: #1a1a1a; border: 1px solid #333; border-radius: 10px; padding: 12px 14px; color: #fff; font-size: 15px; outline: none; }
+  .add-row input:focus { border-color: #3b82f6; }
+  .add-row button { background: #3b82f6; color: #fff; border: none; border-radius: 10px; padding: 0 20px; font-size: 14px; font-weight: 600; cursor: pointer; }
+  .game-btn { width: 100%; padding: 14px; border-radius: 12px; border: none; font-size: 16px; font-weight: 700; cursor: pointer; color: #fff; margin-bottom: 16px; }
+  .game-btn.start { background: linear-gradient(135deg, #22c55e, #16a34a); }
+  .game-btn.end { background: linear-gradient(135deg, #ef4444, #dc2626); }
+  .game-btn:disabled { background: #2a2a2a; color: #555; cursor: default; }
+  .section-header { background: none; border: none; color: #aaa; font-size: 14px; font-weight: 600; cursor: pointer; padding: 6px 0; display: flex; align-items: center; gap: 6px; }
+  .section-header .count { color: #555; font-weight: 400; }
+  .section { margin-bottom: 16px; }
+  .player-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; margin-bottom: 4px; border: 1px solid #1e1e1e; background: #141414; }
+  .player-row.playing { background: #0a1f0a; border-color: #1a3a1a; }
+  .player-row.next-up { background: #1a1a0a; border-color: #2a2a1a; }
+  .rank { width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; color: #555; background: #ffffff08; flex-shrink: 0; }
+  .rank.highlight { color: #f59e0b; background: #f59e0b22; }
+  .player-info { flex: 1; min-width: 0; }
+  .player-name { font-size: 15px; font-weight: 500; color: #ddd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .player-name.playing { color: #4ade80; }
+  .player-meta { font-size: 11px; color: #555; margin-top: 2px; }
+  .sat-warn { margin-left: 8px; }
+  .sat-0 { color: #555; }
+  .sat-1 { color: #f59e0b; }
+  .sat-2 { color: #ef4444; }
+  .remove-btn { background: none; border: none; color: #444; font-size: 18px; cursor: pointer; padding: 0 4px; line-height: 1; }
+  .return-btn { background: #1a2a1a; color: #4ade80; border: 1px solid #2a3a2a; border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  .inactive-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: #151515; border-radius: 8px; margin-bottom: 4px; }
+  .inactive-row span { color: #555; font-size: 14px; }
+  .history-toggle { background: none; border: none; color: #666; font-size: 13px; cursor: pointer; padding: 8px 0; }
+  .history-item { background: #1a1a1a; border-radius: 8px; padding: 10px 12px; margin-bottom: 6px; border: 1px solid #222; }
+  .history-game { font-size: 12px; color: #f59e0b; font-weight: 600; margin-bottom: 4px; }
+  .history-players { font-size: 13px; color: #888; line-height: 1.5; }
+  .info-box { margin-top: 24px; padding: 16px; background: #1a1a1a; border-radius: 12px; border: 1px solid #2a2a2a; }
+  .info-box .title { font-size: 13px; font-weight: 600; color: #888; margin-bottom: 8px; }
+  .info-box .desc { font-size: 13px; color: #666; line-height: 1.6; }
+  .timer-section { display: flex; align-items: center; gap: 12px; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 12px 16px; margin-bottom: 16px; }
+  .timer-display { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; color: #fff; min-width: 80px; }
+  .timer-display.warning { color: #f59e0b; }
+  .timer-display.danger { color: #ef4444; }
+  .timer-label { font-size: 12px; color: #666; }
+  .edit-bar { display: flex; gap: 8px; margin-bottom: 16px; }
+  .edit-bar button { flex: 1; padding: 10px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid #333; background: #1a1a1a; color: #aaa; }
+  .edit-bar button.active { border-color: #a855f7; color: #a855f7; background: #a855f722; }
+  .edit-bar button.swap-active { border-color: #f59e0b; color: #f59e0b; background: #f59e0b22; }
+  .move-btns { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
+  .move-btn { background: #252525; border: 1px solid #333; color: #888; width: 28px; height: 22px; border-radius: 5px; font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
+  .move-btn:active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+  .player-row.swap-select { border-color: #f59e0b !important; background: #f59e0b11 !important; animation: swapPulse 1s ease-in-out infinite; }
+  @keyframes swapPulse {
+    0%, 100% { box-shadow: 0 0 0 0 #f59e0b00; }
+    50% { box-shadow: 0 0 8px 2px #f59e0b44; }
+  }
+  .swap-banner { background: #f59e0b22; border: 1px solid #f59e0b44; border-radius: 10px; padding: 10px 14px; margin-bottom: 12px; font-size: 13px; color: #f59e0b; text-align: center; }
+  @keyframes swapFlash {
+    0% { transform: scale(1); box-shadow: 0 0 0 0 #a855f700; }
+    30% { transform: scale(1.02); box-shadow: 0 0 12px 2px #a855f766; border-color: #a855f7; }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 #a855f700; }
+  }
+  .player-row.swap-anim {
+    animation: swapFlash 0.5s ease-out;
+  }
+  @keyframes moveUp {
+    0% { transform: translateY(10px); opacity: 0.6; }
+    100% { transform: translateY(0); opacity: 1; }
+  }
+  @keyframes moveDown {
+    0% { transform: translateY(-10px); opacity: 0.6; }
+    100% { transform: translateY(0); opacity: 1; }
+  }
+  .player-row.move-anim {
+    animation: moveUp 0.25s ease-out;
+  }
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const PLAYERS_PER_GAME = 10;
+const GAME_DURATION = 16 * 60; // 16 minutes in seconds
+
+let state = {
+  players: [],
+  gameInProgress: false,
+  currentGame: [],
+  gameNumber: 0,
+  history: [],
+  showHistory: false,
+  timer: GAME_DURATION,
+  timerRunning: false,
+  timerInterval: null,
+  editMode: false,
+  swapMode: false,
+  swapFirst: null, // player id of first swap selection
+  swappedIds: [], // recently swapped player ids for animation
+  movedId: null, // recently moved player id for animation
+};
+
+// Try to load saved state
+try {
+  const saved = localStorage.getItem('pickup-queue-state');
+  if (saved) {
+    const parsed = JSON.parse(saved);
+    // Restore everything except timer runtime stuff
+    state.players = parsed.players || [];
+    state.gameInProgress = parsed.gameInProgress || false;
+    state.currentGame = parsed.currentGame || [];
+    state.gameNumber = parsed.gameNumber || 0;
+    state.history = parsed.history || [];
+    state.timer = parsed.timer || GAME_DURATION;
+  }
+} catch(e) {}
+
+function saveState() {
+  try {
+    localStorage.setItem('pickup-queue-state', JSON.stringify({
+      players: state.players,
+      gameInProgress: state.gameInProgress,
+      currentGame: state.currentGame,
+      gameNumber: state.gameNumber,
+      history: state.history,
+      timer: state.timer,
+    }));
+  } catch(e) {}
+}
+
+function getPriority(p) {
+  // If manually ordered, use that (lower queueOrder = higher in list)
+  if (p.queueOrder != null) return -p.queueOrder;
+  // Primary: games sat out (more = higher priority)
+  // Secondary: fewer games played = higher priority (fresh players beat back-to-back)
+  // Tertiary: arrival order tiebreaker
+  return p.gamesSatOut * 1000000 - p.gamesPlayed * 1000 - p.arrivalOrder;
+}
+
+function getActivePlayers() {
+  return state.players.filter(p => p.active);
+}
+
+function getWaitingPlayers() {
+  return getActivePlayers()
+    .filter(p => !state.currentGame.includes(p.id))
+    .sort((a, b) => getPriority(b) - getPriority(a));
+}
+
+function getNextGamePlayers() {
+  const sorted = [...getActivePlayers()].sort((a, b) => getPriority(b) - getPriority(a));
+  return sorted.slice(0, PLAYERS_PER_GAME);
+}
+
+function addPlayer(name) {
+  name = name.trim();
+  if (!name) return;
+  if (state.players.find(p => p.name.toLowerCase() === name.toLowerCase() && p.active)) {
+    showAddToast(`${name} is already in the list!`, '#ef4444');
+    return;
+  }
+  state.players.push({
+    id: Date.now(),
+    name,
+    arrivalOrder: state.players.length,
+    gamesSatOut: 0,
+    gamesPlayed: 0,
+    active: true,
+    queueOrder: null,
+  });
+  saveState();
+  const addedName = name;
+  render();
+  showAddToast(`✓ ${addedName} added`, '#4ade80');
+  const input = document.getElementById('name-input');
+  if (input) { input.value = ''; input.focus(); }
+}
+
+function showAddToast(msg, color) {
+  const toast = document.getElementById('add-toast');
+  if (toast) {
+    toast.textContent = msg;
+    toast.style.color = color || '#4ade80';
+    toast.style.opacity = '1';
+    clearTimeout(window._addToastTimer);
+    window._addToastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 2000);
+  }
+}
+
+function showBottomToast(msg, color) {
+  const toast = document.getElementById('bottom-toast');
+  if (toast) {
+    toast.textContent = msg;
+    toast.style.color = color || '#4ade80';
+    toast.style.opacity = '1';
+    clearTimeout(window._bottomToastTimer);
+    window._bottomToastTimer = setTimeout(() => { toast.style.opacity = '0'; }, 2000);
+  }
+}
+
+function removePlayer(id) {
+  const p = state.players.find(p => p.id === id);
+  if (p) p.active = false;
+  state.currentGame = state.currentGame.filter(pid => pid !== id);
+  saveState();
+  render();
+}
+
+function reactivatePlayer(id) {
+  const p = state.players.find(p => p.id === id);
+  if (p) { p.active = true; p.gamesSatOut = 0; p.queueOrder = null; }
+  saveState();
+  render();
+}
+
+function toggleEditMode() {
+  state.editMode = !state.editMode;
+  if (!state.editMode) { state.swapMode = false; state.swapFirst = null; }
+  render();
+}
+
+function toggleSwapMode() {
+  state.swapMode = !state.swapMode;
+  state.swapFirst = null;
+  render();
+}
+
+function assignManualOrder() {
+  // Snapshot current sorted order into explicit queueOrder values
+  const sorted = getActivePlayers()
+    .filter(p => !state.currentGame.includes(p.id))
+    .sort((a, b) => getPriority(b) - getPriority(a));
+  sorted.forEach((p, i) => { p.queueOrder = i; });
+}
+
+function movePlayer(id, direction) {
+  assignManualOrder();
+  const sorted = getActivePlayers()
+    .filter(p => !state.currentGame.includes(p.id))
+    .sort((a, b) => a.queueOrder - b.queueOrder);
+  const idx = sorted.findIndex(p => p.id === id);
+  if (idx < 0) return;
+  const targetIdx = idx + (direction === 'up' ? -1 : 1);
+  if (targetIdx < 0 || targetIdx >= sorted.length) return;
+  const tmp = sorted[idx].queueOrder;
+  sorted[idx].queueOrder = sorted[targetIdx].queueOrder;
+  sorted[targetIdx].queueOrder = tmp;
+  state.movedId = id;
+  saveState();
+  render();
+  setTimeout(() => { state.movedId = null; }, 300);
+}
+
+function handleSwapTap(id) {
+  if (!state.swapMode) return;
+  if (state.swapFirst === null) {
+    state.swapFirst = id;
+    render();
+  } else if (state.swapFirst === id) {
+    state.swapFirst = null;
+    render();
+  } else {
+    assignManualOrder();
+    const p1 = state.players.find(p => p.id === state.swapFirst);
+    const p2 = state.players.find(p => p.id === id);
+    if (p1 && p2) {
+      const tmp = p1.queueOrder;
+      p1.queueOrder = p2.queueOrder;
+      p2.queueOrder = tmp;
+      state.swappedIds = [p1.id, p2.id];
+      showAddToast(`🔄 ${p1.name} ↔ ${p2.name} swapped`, '#a855f7');
+    }
+    state.swapFirst = null;
+    state.swapMode = false;
+    saveState();
+    render();
+    setTimeout(() => { state.swappedIds = []; }, 600);
+  }
+}
+
+function startGame() {
+  if (getActivePlayers().length < PLAYERS_PER_GAME) {
+    alert(`Need at least ${PLAYERS_PER_GAME} players!`);
+    return;
+  }
+  const nextUp = getNextGamePlayers();
+  state.currentGame = nextUp.map(p => p.id);
+  state.gameInProgress = true;
+  state.gameNumber++;
+  state.timer = GAME_DURATION;
+  startTimer();
+  saveState();
+  render();
+}
+
+function endGame() {
+  stopTimer();
+  state.players.forEach(p => {
+    if (!p.active) return;
+    if (state.currentGame.includes(p.id)) {
+      p.gamesPlayed++;
+      p.gamesSatOut = 0;
+    } else {
+      p.gamesSatOut++;
+    }
+    p.queueOrder = null; // reset manual order so auto-priority kicks in
+  });
+  const playedNames = state.players.filter(p => state.currentGame.includes(p.id)).map(p => p.name);
+  state.history.push({ game: state.gameNumber, players: playedNames });
+  state.currentGame = [];
+  state.gameInProgress = false;
+  state.timer = GAME_DURATION;
+  saveState();
+  render();
+}
+
+function startTimer() {
+  stopTimer();
+  state.timerRunning = true;
+  state.timerInterval = setInterval(() => {
+    state.timer--;
+    if (state.timer <= 0) {
+      state.timer = 0;
+      stopTimer();
+      try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch(e) {}
+    }
+    saveState();
+    renderTimer();
+  }, 1000);
+}
+
+function stopTimer() {
+  state.timerRunning = false;
+  if (state.timerInterval) { clearInterval(state.timerInterval); state.timerInterval = null; }
+}
+
+function toggleTimer() {
+  if (!state.gameInProgress) return;
+  if (state.timerRunning) stopTimer();
+  else startTimer();
+  render();
+}
+
+function formatTime(s) {
+  const m = Math.floor(s / 60);
+  const sec = s % 60;
+  return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+
+function renderTimer() {
+  const el = document.getElementById('timer-display');
+  if (!el) return;
+  el.textContent = formatTime(state.timer);
+  el.className = 'timer-display' + (state.timer <= 60 ? ' danger' : state.timer <= 180 ? ' warning' : '');
+}
+
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function playerRowHTML(p, opts = {}) {
+  const { status, rank, isNextUp } = opts;
+  const satClass = p.gamesSatOut >= 2 ? 'sat-2' : p.gamesSatOut === 1 ? 'sat-1' : 'sat-0';
+  const isSwapSelected = state.swapMode && state.swapFirst === p.id;
+  const isSwapAnimating = state.swappedIds.includes(p.id);
+  const isMoveAnimating = state.movedId === p.id;
+  const rowClass = (status === 'playing' ? 'playing' : isNextUp ? 'next-up' : '') + (isSwapSelected ? ' swap-select' : '') + (isSwapAnimating ? ' swap-anim' : '') + (isMoveAnimating ? ' move-anim' : '');
+  const nameClass = status === 'playing' ? 'playing' : '';
+  const rankHTML = rank ? `<div class="rank${isNextUp ? ' highlight' : ''}">${rank}</div>` : '';
+  const satHTML = p.gamesSatOut > 0 ? `<span class="sat-warn ${satClass}">⏳ sat ${p.gamesSatOut}</span>` : '';
+
+  const swapTap = state.swapMode && status !== 'playing' ? `onclick="handleSwapTap(${p.id})"` : '';
+  const swapCursor = state.swapMode && status !== 'playing' ? 'cursor:pointer;' : '';
+
+  let actionsHTML = '';
+  if (state.editMode && status !== 'playing') {
+    if (state.swapMode) {
+      // In swap mode, the whole row is tappable
+      actionsHTML = '';
+    } else {
+      actionsHTML = `
+        <div class="move-btns">
+          <button class="move-btn" onclick="event.stopPropagation();movePlayer(${p.id},'up')" title="Move up">▲</button>
+          <button class="move-btn" onclick="event.stopPropagation();movePlayer(${p.id},'down')" title="Move down">▼</button>
+        </div>`;
+    }
+  }
+
+  return `
+    <div class="player-row ${rowClass}" ${swapTap} style="${swapCursor}">
+      ${rankHTML}
+      <div class="player-info">
+        <div class="player-name ${nameClass}">${esc(p.name)}</div>
+        <div class="player-meta">${p.gamesPlayed}g played${satHTML}</div>
+      </div>
+      ${actionsHTML}
+      <button class="remove-btn" onclick="event.stopPropagation();removePlayer(${p.id})" title="Remove">×</button>
+    </div>`;
+}
+
+function render() {
+  const active = getActivePlayers();
+  const inactive = state.players.filter(p => !p.active);
+  const waiting = getWaitingPlayers();
+  const nextPreview = !state.gameInProgress ? getNextGamePlayers() : [];
+
+  let html = `
+    <div class="header">
+      <div style="font-size:32px;margin-bottom:4px">🏀</div>
+      <h1>Pickup Queue</h1>
+      <p>Fair rotation — longest wait = next up</p>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="stat-val" style="color:#3b82f6">${active.length}</div><div class="stat-label">Players</div></div>
+      <div class="stat"><div class="stat-val" style="color:#f59e0b">${state.gameNumber || '—'}</div><div class="stat-label">Game</div></div>
+      <div class="stat"><div class="stat-val" style="color:#ef4444">${waiting.length}</div><div class="stat-label">Waiting</div></div>
+    </div>
+    <div class="add-row">
+      <input id="name-input" placeholder="Add player name..." onkeydown="if(event.key==='Enter'){addPlayer(this.value);}" />
+      <button onmousedown="event.preventDefault()" onclick="const i=document.getElementById('name-input');addPlayer(i.value);">Add</button>
+    </div>`;
+
+  // Add player toast
+  html += `<div id="add-toast" style="text-align:center;font-size:13px;color:#4ade80;margin:-12px 0 12px;opacity:0;transition:opacity 0.3s;height:20px"></div>`;
+
+  // Edit bar
+  if (active.length > 1) {
+    html += `<div class="edit-bar">
+      <button class="${state.editMode && !state.swapMode ? 'active' : ''}" onclick="toggleEditMode()">✏️ ${state.editMode ? 'Done' : 'Reorder'}</button>
+      <button class="${state.swapMode ? 'swap-active' : ''}" onclick="${state.editMode ? 'toggleSwapMode()' : 'state.editMode=true;toggleSwapMode();render();'}">🔄 Swap</button>
+    </div>`;
+  }
+
+  // Swap banner
+  if (state.swapMode) {
+    html += `<div class="swap-banner">${state.swapFirst ? 'Now tap the second player to swap with' : 'Tap the first player to swap'}</div>`;
+  }
+  if (!state.gameInProgress) {
+    const need = PLAYERS_PER_GAME - active.length;
+    if (need > 0) {
+      html += `<button class="game-btn" disabled>Need ${need} more player${need > 1 ? 's' : ''}</button>`;
+    } else {
+      html += `<button class="game-btn start" onclick="startGame()">🏀 Start Game ${state.gameNumber + 1}</button>`;
+    }
+  } else {
+    // Timer
+    const timerClass = state.timer <= 60 ? 'danger' : state.timer <= 180 ? 'warning' : '';
+    html += `
+      <div class="timer-section" onclick="toggleTimer()" style="cursor:pointer">
+        <div>
+          <div id="timer-display" class="timer-display ${timerClass}">${formatTime(state.timer)}</div>
+          <div class="timer-label">${state.timerRunning ? 'tap to pause' : 'tap to resume'}</div>
+        </div>
+        <div style="flex:1"></div>
+        <div style="font-size:24px">${state.timerRunning ? '⏸' : '▶️'}</div>
+      </div>`;
+    html += `<button class="game-btn end" onclick="endGame()">🔔 End Game ${state.gameNumber}</button>`;
+  }
+
+  // Currently playing
+  if (state.gameInProgress) {
+    const playing = state.players.filter(p => state.currentGame.includes(p.id));
+    html += `<div class="section"><button class="section-header">🟢 Now Playing <span class="count">(${playing.length})</span></button>`;
+    playing.forEach(p => { html += playerRowHTML(p, { status: 'playing' }); });
+    html += `</div>`;
+  }
+
+  if (state.gameInProgress) {
+    // During game: show waiting list with priority
+    if (waiting.length > 0) {
+      html += `<div class="section"><button class="section-header">⏳ Waiting <span class="count">(${waiting.length})</span></button>`;
+      waiting.forEach((p, i) => {
+        const isNext = i < PLAYERS_PER_GAME;
+        html += playerRowHTML(p, { status: 'waiting', rank: i + 1, isNextUp: isNext });
+      });
+      html += `</div>`;
+    }
+  } else {
+    // Between games: split into Next Up and On Deck
+    const nextUpIds = nextPreview.map(p => p.id);
+    const onDeck = waiting.filter(p => !nextUpIds.includes(p.id));
+
+    if (active.length >= PLAYERS_PER_GAME) {
+      html += `<div class="section"><button class="section-header">⏭️ Next Up <span class="count">(${nextPreview.length})</span></button>`;
+      nextPreview.forEach((p, i) => { html += playerRowHTML(p, { status: 'next', rank: i + 1, isNextUp: true }); });
+      html += `</div>`;
+    }
+
+    if (onDeck.length > 0) {
+      html += `<div class="section"><button class="section-header">🪑 On Deck <span class="count">(${onDeck.length})</span></button>`;
+      onDeck.forEach((p, i) => { html += playerRowHTML(p, { status: 'waiting', rank: i + 1 }); });
+      html += `</div>`;
+    }
+
+    // If not enough players yet, show everyone
+    if (active.length > 0 && active.length < PLAYERS_PER_GAME) {
+      html += `<div class="section"><button class="section-header">👥 Players <span class="count">(${active.length})</span></button>`;
+      waiting.forEach((p, i) => { html += playerRowHTML(p, { status: 'waiting' }); });
+      html += `</div>`;
+    }
+  }
+
+  // Inactive
+  if (inactive.length > 0) {
+    html += `<div class="section"><button class="section-header" onclick="document.getElementById('inactive-list').style.display=document.getElementById('inactive-list').style.display==='none'?'block':'none'">👋 Left <span class="count">(${inactive.length})</span></button><div id="inactive-list" style="display:none;margin-top:6px">`;
+    inactive.forEach(p => {
+      html += `<div class="inactive-row"><span>${esc(p.name)}</span><button class="return-btn" onclick="reactivatePlayer(${p.id})">Return</button></div>`;
+    });
+    html += `</div></div>`;
+  }
+
+  // History
+  if (state.history.length > 0) {
+    html += `<div style="margin-top:16px"><button class="history-toggle" onclick="state.showHistory=!state.showHistory;render();">${state.showHistory ? '▼' : '▶'} Game History (${state.history.length} games)</button>`;
+    if (state.showHistory) {
+      html += `<div style="margin-top:8px">`;
+      state.history.forEach(h => {
+        html += `<div class="history-item"><div class="history-game">Game ${h.game}</div><div class="history-players">${h.players.map(esc).join(', ')}</div></div>`;
+      });
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
+  // Export button
+  html += `
+    <div style="margin-top:24px;">
+      <button onclick="copyQueue()" id="copy-btn" style="width:100%;padding:14px;border-radius:12px;border:1px solid #3b82f6;background:#3b82f622;color:#3b82f6;font-size:15px;font-weight:600;cursor:pointer;">📋 Copy Queue Summary</button>
+      <button onclick="copyPlayerList()" style="width:100%;padding:14px;border-radius:12px;border:1px solid #22c55e;background:#22c55e22;color:#22c55e;font-size:15px;font-weight:600;cursor:pointer;margin-top:8px;">📝 Copy Player List</button>
+      <div id="bottom-toast" style="text-align:center;font-size:13px;color:#4ade80;margin-top:8px;opacity:0;transition:opacity 0.3s;height:20px"></div>
+    </div>`;
+
+  // Transfer buttons
+  html += `
+    <div style="margin-top:12px;display:flex;gap:8px;">
+      <button onclick="exportTransferCode()" style="flex:1;padding:12px;border-radius:12px;border:1px solid #a855f7;background:#a855f722;color:#a855f7;font-size:14px;font-weight:600;cursor:pointer;">📤 Export</button>
+      <button onclick="showImportDialog()" style="flex:1;padding:12px;border-radius:12px;border:1px solid #a855f7;background:#a855f722;color:#a855f7;font-size:14px;font-weight:600;cursor:pointer;">📥 Import</button>
+    </div>
+    <div style="text-align:center;font-size:11px;color:#555;margin-top:6px;">Transfer queue to another phone</div>`;
+
+  // Reset button
+  html += `<div style="margin-top:16px;text-align:center"><button onclick="if(confirm('Reset everything?')){state.players=[];state.currentGame=[];state.gameNumber=0;state.history=[];state.gameInProgress=false;state.timer=${GAME_DURATION};stopTimer();saveState();render();}" style="background:none;border:1px solid #333;color:#555;border-radius:8px;padding:8px 16px;font-size:12px;cursor:pointer">Reset All</button></div>`;
+
+  // Info
+  html += `
+    <div class="info-box">
+      <div class="title">How the queue works</div>
+      <div class="desc">Priority = games sat out. The more games you've waited, the higher you are in the queue. New arrivals start at 0. Ties broken by games played then arrival order. Use ✏️ Reorder to fix order with ▲▼ arrows, or 🔄 Swap to let two players trade spots.</div>
+    </div>`;
+
+  document.getElementById('app').innerHTML = html;
+}
+
+function exportTransferCode() {
+  const data = {
+    p: state.players.filter(p => p.active).map(p => ({
+      n: p.name, a: p.arrivalOrder, s: p.gamesSatOut, g: p.gamesPlayed, id: p.id
+    })),
+    ip_list: state.players.filter(p => !p.active).map(p => ({
+      n: p.name, a: p.arrivalOrder, s: p.gamesSatOut, g: p.gamesPlayed, id: p.id
+    })),
+    c: state.currentGame,
+    gn: state.gameNumber,
+    h: state.history,
+    ip: state.gameInProgress,
+    t: state.timer,
+  };
+  const code = btoa(unescape(encodeURIComponent(JSON.stringify(data))));
+  navigator.clipboard.writeText(code).then(() => {
+    showBottomToast('✓ Transfer code copied!', '#a855f7');
+  }).catch(() => {
+    prompt('Copy this transfer code:', code);
+  });
+}
+
+function showImportDialog() {
+  const code = prompt('Paste the transfer code:');
+  if (!code || !code.trim()) return;
+  try {
+    const json = decodeURIComponent(escape(atob(code.trim())));
+    const data = JSON.parse(json);
+    if (!data.p || !Array.isArray(data.p)) throw new Error('Invalid');
+    stopTimer();
+    state.players = data.p.map(p => ({
+      id: p.id || Date.now() + Math.random() * 1000,
+      name: p.n,
+      arrivalOrder: p.a,
+      gamesSatOut: p.s,
+      gamesPlayed: p.g,
+      active: true,
+      queueOrder: null,
+    }));
+    if (data.ip_list) {
+      data.ip_list.forEach(p => {
+        state.players.push({
+          id: p.id || Date.now() + Math.random() * 1000,
+          name: p.n,
+          arrivalOrder: p.a,
+          gamesSatOut: p.s,
+          gamesPlayed: p.g,
+          active: false,
+          queueOrder: null,
+        });
+      });
+    }
+    state.currentGame = data.c || [];
+    state.gameNumber = data.gn || 0;
+    state.history = data.h || [];
+    state.gameInProgress = data.ip || false;
+    state.timer = data.t || GAME_DURATION;
+    state.editMode = false;
+    state.swapMode = false;
+    state.swapFirst = null;
+    if (state.gameInProgress) startTimer();
+    saveState();
+    render();
+    showBottomToast(`✓ Imported ${state.players.length} players`, '#a855f7');
+  } catch(e) {
+    alert('Invalid transfer code. Make sure you copied the full code.');
+  }
+}
+
+function copyPlayerList() {
+  const allPlayers = [...state.players].sort((a, b) => a.arrivalOrder - b.arrivalOrder);
+  if (allPlayers.length === 0) { showBottomToast('No players to copy', '#ef4444'); return; }
+
+  let text = '🏀 PLAYER LIST\n';
+  text += '═══════════════════\n\n';
+  let count = 1;
+  allPlayers.forEach(p => {
+    const status = p.active ? '' : ' (left)';
+    text += `${count}. ${p.name}${status}\n`;
+    count++;
+  });
+  text += `\nTotal: ${allPlayers.length} players`;
+  const activeCount = allPlayers.filter(p => p.active).length;
+  const leftCount = allPlayers.length - activeCount;
+  if (leftCount > 0) text += ` (${activeCount} active, ${leftCount} left)`;
+
+  navigator.clipboard.writeText(text).then(() => {
+    showBottomToast('✓ Player list copied!', '#4ade80');
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showBottomToast('✓ Player list copied!', '#4ade80');
+  });
+}
+
+function copyQueue() {
+  let text = '🏀 PICKUP QUEUE\n';
+  text += '═══════════════════\n\n';
+
+  // Past games
+  if (state.history.length > 0) {
+    state.history.forEach(h => {
+      text += `Game ${h.game}:\n`;
+      h.players.forEach((name, i) => { text += `  ${i + 1}. ${name}\n`; });
+      text += '\n';
+    });
+  }
+
+  // Current game
+  if (state.gameInProgress) {
+    const playing = state.players.filter(p => state.currentGame.includes(p.id));
+    text += `Game ${state.gameNumber} (IN PROGRESS):\n`;
+    playing.forEach((p, i) => { text += `  ${i + 1}. ${p.name}\n`; });
+    text += '\n';
+  }
+
+  // Waiting queue / next up
+  const waiting = getWaitingPlayers();
+  if (waiting.length > 0) {
+    const nextGameNum = state.gameInProgress ? state.gameNumber + 1 : state.gameNumber + 1;
+    let gameOffset = 0;
+    while (gameOffset < waiting.length) {
+      const batch = waiting.slice(gameOffset, gameOffset + PLAYERS_PER_GAME);
+      const gNum = nextGameNum + Math.floor(gameOffset / PLAYERS_PER_GAME);
+      text += `Game ${gNum} (NEXT):\n`;
+      batch.forEach((p, i) => {
+        const satInfo = p.gamesSatOut > 0 ? ` [sat ${p.gamesSatOut}]` : '';
+        text += `  ${i + 1}. ${p.name}${satInfo}\n`;
+      });
+      text += '\n';
+      gameOffset += PLAYERS_PER_GAME;
+    }
+  }
+
+  // Player stats summary
+  const active = getActivePlayers();
+  if (active.length > 0) {
+    text += '───────────────────\n';
+    text += 'Player Stats:\n';
+    active.sort((a, b) => getPriority(b) - getPriority(a)).forEach(p => {
+      text += `  ${p.name} — ${p.gamesPlayed}g played, sat ${p.gamesSatOut}\n`;
+    });
+  }
+
+  // Players who left
+  const inactive = state.players.filter(p => !p.active);
+  if (inactive.length > 0) {
+    text += '\n👋 Left:\n';
+    inactive.forEach(p => {
+      text += `  ${p.name} — ${p.gamesPlayed}g played\n`;
+    });
+  }
+
+  navigator.clipboard.writeText(text).then(() => {
+    showBottomToast('✓ Queue summary copied!', '#4ade80');
+  }).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    showBottomToast('✓ Queue summary copied!', '#4ade80');
+  });
+}
+
+render();
+</script>
+</body>
+</html>
