@@ -60,9 +60,11 @@
   .edit-bar button { flex: 1; padding: 10px; border-radius: 10px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid #333; background: #1a1a1a; color: #aaa; }
   .edit-bar button.active { border-color: #a855f7; color: #a855f7; background: #a855f722; }
   .edit-bar button.swap-active { border-color: #f59e0b; color: #f59e0b; background: #f59e0b22; }
-  .move-btns { display: flex; flex-direction: column; gap: 2px; flex-shrink: 0; }
-  .move-btn { background: #252525; border: 1px solid #333; color: #888; width: 28px; height: 22px; border-radius: 5px; font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center; padding: 0; }
-  .move-btn:active { background: #3b82f6; color: #fff; border-color: #3b82f6; }
+  .drag-handle { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; color: #555; font-size: 20px; cursor: grab; flex-shrink: 0; touch-action: none; user-select: none; -webkit-user-select: none; border-radius: 8px; }
+  .drag-handle:active { cursor: grabbing; color: #888; background: #ffffff0a; }
+  .player-row.dragging { position: fixed; z-index: 1000; box-shadow: 0 8px 32px rgba(0,0,0,0.5); transform: scale(1.03); opacity: 0.92; pointer-events: none; border-color: #3b82f6 !important; background: #1a1a2a !important; }
+  .player-row.drag-shift { transition: transform 0.25s ease; }
+  .drag-placeholder { border: 2px dashed #3b82f644; border-radius: 10px; background: #3b82f608; margin-bottom: 4px; }
   .player-row.swap-select { border-color: #f59e0b !important; background: #f59e0b11 !important; animation: swapPulse 1s ease-in-out infinite; }
   @keyframes swapPulse {
     0%, 100% { box-shadow: 0 0 0 0 #f59e0b00; }
@@ -76,17 +78,6 @@
   }
   .player-row.swap-anim {
     animation: swapFlash 0.5s ease-out;
-  }
-  @keyframes moveUp {
-    0% { transform: translateY(10px); opacity: 0.6; }
-    100% { transform: translateY(0); opacity: 1; }
-  }
-  @keyframes moveDown {
-    0% { transform: translateY(-10px); opacity: 0.6; }
-    100% { transform: translateY(0); opacity: 1; }
-  }
-  .player-row.move-anim {
-    animation: moveUp 0.25s ease-out;
   }
 </style>
 </head>
@@ -110,7 +101,6 @@ let state = {
   swapMode: false,
   swapFirst: null, // player id of first swap selection
   swappedIds: [], // recently swapped player ids for animation
-  movedId: null, // recently moved player id for animation
 };
 
 // Try to load saved state
@@ -253,22 +243,148 @@ function assignManualOrder() {
   sorted.forEach((p, i) => { p.queueOrder = i; });
 }
 
-function movePlayer(id, direction) {
+// Drag-and-drop reordering
+let drag = { active: false, playerId: null, el: null, placeholder: null, startY: 0, offsetY: 0, rows: [], sortedPlayers: [], fromIndex: -1, currentIndex: -1 };
+
+function getClientY(e) {
+  if (e.touches && e.touches.length > 0) return e.touches[0].clientY;
+  if (e.changedTouches && e.changedTouches.length > 0) return e.changedTouches[0].clientY;
+  return e.clientY;
+}
+
+function onDragStart(e, playerId) {
+  e.preventDefault();
   assignManualOrder();
+
+  const row = document.querySelector(`.player-row[data-drag-id="${playerId}"]`);
+  if (!row) return;
+
+  const rect = row.getBoundingClientRect();
+  const clientY = getClientY(e);
+
+  // Collect all draggable rows (non-playing, in edit mode)
+  const allRows = Array.from(document.querySelectorAll('.player-row[data-drag-id]')).filter(r => r.querySelector('.drag-handle'));
+  const rects = allRows.map(r => ({ el: r, rect: r.getBoundingClientRect(), id: Number(r.dataset.dragId) }));
+
+  // Sorted player list matching the row order
   const sorted = getActivePlayers()
     .filter(p => !state.currentGame.includes(p.id))
     .sort((a, b) => a.queueOrder - b.queueOrder);
-  const idx = sorted.findIndex(p => p.id === id);
-  if (idx < 0) return;
-  const targetIdx = idx + (direction === 'up' ? -1 : 1);
-  if (targetIdx < 0 || targetIdx >= sorted.length) return;
-  const tmp = sorted[idx].queueOrder;
-  sorted[idx].queueOrder = sorted[targetIdx].queueOrder;
-  sorted[targetIdx].queueOrder = tmp;
-  state.movedId = id;
-  saveState();
+
+  const fromIndex = rects.findIndex(r => r.id === playerId);
+  if (fromIndex < 0) return;
+
+  // Create placeholder
+  const placeholder = document.createElement('div');
+  placeholder.className = 'drag-placeholder';
+  placeholder.style.height = rect.height + 'px';
+  row.parentNode.insertBefore(placeholder, row);
+
+  // Style the dragged row as fixed
+  row.style.position = 'fixed';
+  row.style.left = rect.left + 'px';
+  row.style.top = rect.top + 'px';
+  row.style.width = rect.width + 'px';
+  row.classList.add('dragging');
+
+  // Add shift transition class to other rows
+  rects.forEach(r => { if (r.id !== playerId) r.el.classList.add('drag-shift'); });
+
+  drag = {
+    active: true,
+    playerId,
+    el: row,
+    placeholder,
+    startY: rect.top,
+    offsetY: clientY - rect.top,
+    rows: rects,
+    sortedPlayers: sorted,
+    fromIndex,
+    currentIndex: fromIndex,
+  };
+}
+
+function onDragMove(e) {
+  if (!drag.active) return;
+  e.preventDefault();
+
+  const clientY = getClientY(e);
+  const newTop = clientY - drag.offsetY;
+  drag.el.style.top = newTop + 'px';
+
+  // Determine the dragged element's center Y
+  const dragCenterY = newTop + drag.el.offsetHeight / 2;
+
+  // Check each row and shift accordingly
+  drag.rows.forEach((r, i) => {
+    if (r.id === drag.playerId) return;
+    const rowMidY = r.rect.top + r.rect.height / 2;
+    const rowOrigIndex = i;
+    const dragOrigIndex = drag.fromIndex;
+
+    if (dragOrigIndex < rowOrigIndex && dragCenterY > rowMidY) {
+      r.el.style.transform = `translateY(-${drag.el.offsetHeight + 4}px)`;
+    } else if (dragOrigIndex > rowOrigIndex && dragCenterY < rowMidY) {
+      r.el.style.transform = `translateY(${drag.el.offsetHeight + 4}px)`;
+    } else {
+      r.el.style.transform = '';
+    }
+  });
+
+  // Calculate current insertion index based on how many rows we've passed
+  let newIndex = drag.fromIndex;
+  drag.rows.forEach((r, i) => {
+    if (r.id === drag.playerId) return;
+    const rowMidY = r.rect.top + r.rect.height / 2;
+    if (drag.fromIndex < i && dragCenterY > rowMidY) {
+      newIndex = i;
+    } else if (drag.fromIndex > i && dragCenterY < rowMidY) {
+      newIndex = i;
+    }
+  });
+  drag.currentIndex = newIndex;
+}
+
+function onDragEnd(e) {
+  if (!drag.active) return;
+
+  const { sortedPlayers, fromIndex, currentIndex, el, placeholder } = drag;
+
+  // Clean up DOM
+  el.classList.remove('dragging');
+  el.style.position = '';
+  el.style.left = '';
+  el.style.top = '';
+  el.style.width = '';
+  if (placeholder && placeholder.parentNode) placeholder.parentNode.removeChild(placeholder);
+  drag.rows.forEach(r => { r.el.classList.remove('drag-shift'); r.el.style.transform = ''; });
+
+  // Apply the reorder
+  if (fromIndex !== currentIndex) {
+    const player = sortedPlayers[fromIndex];
+    sortedPlayers.splice(fromIndex, 1);
+    sortedPlayers.splice(currentIndex, 0, player);
+    sortedPlayers.forEach((p, i) => { p.queueOrder = i; });
+    saveState();
+  }
+
+  drag = { active: false, playerId: null, el: null, placeholder: null, startY: 0, offsetY: 0, rows: [], sortedPlayers: [], fromIndex: -1, currentIndex: -1 };
   render();
-  setTimeout(() => { state.movedId = null; }, 300);
+}
+
+function attachDragListeners() {
+  document.querySelectorAll('.drag-handle').forEach(handle => {
+    const playerId = Number(handle.dataset.dragId);
+    handle.addEventListener('touchstart', function(e) { onDragStart(e, playerId); }, { passive: false });
+    handle.addEventListener('mousedown', function(e) { onDragStart(e, playerId); });
+  });
+}
+
+function initDrag() {
+  document.addEventListener('touchmove', onDragMove, { passive: false });
+  document.addEventListener('touchend', onDragEnd);
+  document.addEventListener('mousemove', onDragMove);
+  document.addEventListener('mouseup', onDragEnd);
 }
 
 function handleSwapTap(id) {
@@ -385,8 +501,7 @@ function playerRowHTML(p, opts = {}) {
   const satClass = p.gamesSatOut >= 2 ? 'sat-2' : p.gamesSatOut === 1 ? 'sat-1' : 'sat-0';
   const isSwapSelected = state.swapMode && state.swapFirst === p.id;
   const isSwapAnimating = state.swappedIds.includes(p.id);
-  const isMoveAnimating = state.movedId === p.id;
-  const rowClass = (status === 'playing' ? 'playing' : isNextUp ? 'next-up' : '') + (isSwapSelected ? ' swap-select' : '') + (isSwapAnimating ? ' swap-anim' : '') + (isMoveAnimating ? ' move-anim' : '');
+  const rowClass = (status === 'playing' ? 'playing' : isNextUp ? 'next-up' : '') + (isSwapSelected ? ' swap-select' : '') + (isSwapAnimating ? ' swap-anim' : '');
   const nameClass = status === 'playing' ? 'playing' : '';
   const rankHTML = rank ? `<div class="rank${isNextUp ? ' highlight' : ''}">${rank}</div>` : '';
   const satHTML = p.gamesSatOut > 0 ? `<span class="sat-warn ${satClass}">⏳ sat ${p.gamesSatOut}</span>` : '';
@@ -395,21 +510,12 @@ function playerRowHTML(p, opts = {}) {
   const swapCursor = state.swapMode && status !== 'playing' ? 'cursor:pointer;' : '';
 
   let actionsHTML = '';
-  if (state.editMode && status !== 'playing') {
-    if (state.swapMode) {
-      // In swap mode, the whole row is tappable
-      actionsHTML = '';
-    } else {
-      actionsHTML = `
-        <div class="move-btns">
-          <button class="move-btn" onclick="event.stopPropagation();movePlayer(${p.id},'up')" title="Move up">▲</button>
-          <button class="move-btn" onclick="event.stopPropagation();movePlayer(${p.id},'down')" title="Move down">▼</button>
-        </div>`;
-    }
+  if (state.editMode && status !== 'playing' && !state.swapMode) {
+    actionsHTML = `<div class="drag-handle" data-drag-id="${p.id}">≡</div>`;
   }
 
   return `
-    <div class="player-row ${rowClass}" ${swapTap} style="${swapCursor}">
+    <div class="player-row ${rowClass}" data-drag-id="${p.id}" ${swapTap} style="${swapCursor}">
       ${rankHTML}
       <div class="player-info">
         <div class="player-name ${nameClass}">${esc(p.name)}</div>
@@ -567,10 +673,11 @@ function render() {
   html += `
     <div class="info-box">
       <div class="title">How the queue works</div>
-      <div class="desc">Priority = games sat out. The more games you've waited, the higher you are in the queue. New arrivals start at 0. Ties broken by games played then arrival order. Use ✏️ Reorder to fix order with ▲▼ arrows, or 🔄 Swap to let two players trade spots.</div>
+      <div class="desc">Priority = games sat out. The more games you've waited, the higher you are in the queue. New arrivals start at 0. Ties broken by games played then arrival order. Use ✏️ Reorder to drag players into position with the ≡ handle, or 🔄 Swap to let two players trade spots.</div>
     </div>`;
 
   document.getElementById('app').innerHTML = html;
+  attachDragListeners();
 }
 
 function exportTransferCode() {
@@ -743,6 +850,7 @@ function copyQueue() {
   });
 }
 
+initDrag();
 render();
 </script>
 </body>
