@@ -79,11 +79,247 @@
   .player-row.swap-anim {
     animation: swapFlash 0.5s ease-out;
   }
+  .session-bar { display: flex; align-items: center; gap: 8px; background: #1a1a1a; border: 1px solid #2a2a2a; border-radius: 12px; padding: 10px 14px; margin-bottom: 16px; flex-wrap: wrap; }
+  .session-bar button { background: #1a1a1a; border: 1px solid #333; border-radius: 8px; padding: 8px 14px; font-size: 13px; font-weight: 600; cursor: pointer; color: #aaa; white-space: nowrap; }
+  .session-bar button.primary { border-color: #3b82f6; color: #3b82f6; background: #3b82f622; }
+  .session-bar button.danger { border-color: #ef4444; color: #ef4444; background: #ef444422; }
+  .sync-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 20px; }
+  .sync-badge.live { color: #4ade80; background: #4ade8018; }
+  .sync-badge.reconnecting { color: #f59e0b; background: #f59e0b18; }
+  .session-code { font-family: monospace; font-size: 16px; font-weight: 700; color: #fff; letter-spacing: 2px; }
 </style>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
 </head>
 <body>
 <div id="app"></div>
 <script>
+// Firebase initialization (graceful degradation if CDN fails)
+let db = null;
+let firebaseReady = false;
+let serverTimeOffset = 0;
+
+if (typeof firebase !== 'undefined') {
+  try {
+    firebase.initializeApp({
+      apiKey: "AIzaSyDi_vRTQeVRorXg3aAIx3VUZ3_fDGK9P0k",
+      authDomain: "mpbl-queue.firebaseapp.com",
+      databaseURL: "https://mpbl-queue-default-rtdb.asia-southeast1.firebasedatabase.app",
+      projectId: "mpbl-queue",
+      storageBucket: "mpbl-queue.firebasestorage.app",
+      messagingSenderId: "579220493421",
+      appId: "1:579220493421:web:707f29a7817b4c78245b64"
+    });
+    db = firebase.database();
+    firebaseReady = true;
+    db.ref('.info/serverTimeOffset').on('value', snap => { serverTimeOffset = snap.val() || 0; });
+    db.ref('.info/connected').on('value', snap => {
+      const wasConnected = session.connected;
+      session.connected = !!snap.val();
+      if (session.id && wasConnected !== session.connected) render();
+    });
+  } catch(e) { firebaseReady = false; }
+}
+
+// Session state
+const session = {
+  id: null,
+  ref: null,
+  listener: null,
+  isRemoteUpdate: false,
+  connected: false,
+};
+
+function generateSessionId() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) code += chars[Math.floor(Math.random() * chars.length)];
+  return code;
+}
+
+function serverNow() { return Date.now() + serverTimeOffset; }
+
+function ensureArray(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  // Firebase converts sparse arrays to objects with numeric keys
+  if (typeof val === 'object') return Object.values(val);
+  return [];
+}
+
+let syncTimeout = null;
+function syncToFirebase() {
+  if (!session.id || !session.ref || session.isRemoteUpdate) return;
+  clearTimeout(syncTimeout);
+  syncTimeout = setTimeout(() => {
+    const timerState = {
+      running: state.timerRunning,
+      duration: GAME_DURATION,
+      remainingAtPause: state.timer,
+      startedAt: state.timerRunning ? serverNow() - (GAME_DURATION - state.timer) * 1000 : null,
+    };
+    session.ref.child('state').set({
+      players: state.players,
+      gameInProgress: state.gameInProgress,
+      currentGame: state.currentGame,
+      gameNumber: state.gameNumber,
+      history: state.history,
+      timer: state.timer,
+      timerState,
+    }).catch(() => {});
+  }, 300);
+}
+
+function applyRemoteTimer(timerState) {
+  if (!timerState) return;
+  stopTimer();
+  if (timerState.running && timerState.startedAt) {
+    const elapsed = Math.floor((serverNow() - timerState.startedAt) / 1000);
+    state.timer = Math.max(0, timerState.duration - elapsed);
+    if (state.timer > 0) {
+      state.timerRunning = true;
+      state.timerInterval = setInterval(() => {
+        state.timer--;
+        if (state.timer <= 0) {
+          state.timer = 0;
+          stopTimer();
+          try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch(e) {}
+        }
+        renderTimer();
+      }, 1000);
+    }
+  } else {
+    state.timer = timerState.remainingAtPause != null ? timerState.remainingAtPause : GAME_DURATION;
+    state.timerRunning = false;
+  }
+}
+
+function createSession() {
+  if (!firebaseReady) { alert('Live sync unavailable — could not load Firebase.'); return; }
+  const id = generateSessionId();
+  const ref = db.ref('sessions/' + id);
+  session.id = id;
+  session.ref = ref;
+
+  // Write current state
+  const timerState = {
+    running: state.timerRunning,
+    duration: GAME_DURATION,
+    remainingAtPause: state.timer,
+    startedAt: state.timerRunning ? serverNow() - (GAME_DURATION - state.timer) * 1000 : null,
+  };
+  ref.child('state').set({
+    players: state.players,
+    gameInProgress: state.gameInProgress,
+    currentGame: state.currentGame,
+    gameNumber: state.gameNumber,
+    history: state.history,
+    timer: state.timer,
+    timerState,
+  });
+  ref.child('createdAt').set(serverNow());
+
+  // Start listening
+  session.listener = ref.child('state').on('value', onRemoteState);
+  localStorage.setItem('pickup-queue-session', id);
+  const url = new URL(window.location);
+  url.searchParams.set('session', id);
+  window.history.replaceState({}, '', url);
+  render();
+}
+
+function onRemoteState(snap) {
+  const data = snap.val();
+  if (!data) return;
+  session.isRemoteUpdate = true;
+  state.players = ensureArray(data.players).map(p => ({
+    id: p.id,
+    name: p.name,
+    arrivalOrder: p.arrivalOrder,
+    gamesSatOut: p.gamesSatOut,
+    gamesPlayed: p.gamesPlayed,
+    active: p.active,
+    queueOrder: p.queueOrder != null ? p.queueOrder : null,
+  }));
+  state.gameInProgress = data.gameInProgress || false;
+  state.currentGame = ensureArray(data.currentGame);
+  state.gameNumber = data.gameNumber || 0;
+  state.history = ensureArray(data.history);
+  applyRemoteTimer(data.timerState);
+  // Save to localStorage as offline fallback
+  try {
+    localStorage.setItem('pickup-queue-state', JSON.stringify({
+      players: state.players,
+      gameInProgress: state.gameInProgress,
+      currentGame: state.currentGame,
+      gameNumber: state.gameNumber,
+      history: state.history,
+      timer: state.timer,
+    }));
+  } catch(e) {}
+  session.isRemoteUpdate = false;
+  render();
+}
+
+function joinSession(id) {
+  if (!firebaseReady) { alert('Live sync unavailable — could not load Firebase.'); return; }
+  id = id.trim().toUpperCase();
+  if (id.length !== 6) { alert('Session code must be 6 characters.'); return; }
+  const ref = db.ref('sessions/' + id);
+  ref.child('createdAt').once('value').then(snap => {
+    if (!snap.exists()) { alert('Session not found. Check the code and try again.'); return; }
+    // Detach any existing listener
+    if (session.listener && session.ref) session.ref.child('state').off('value', session.listener);
+    session.id = id;
+    session.ref = ref;
+    session.listener = ref.child('state').on('value', onRemoteState);
+    localStorage.setItem('pickup-queue-session', id);
+    const url = new URL(window.location);
+    url.searchParams.set('session', id);
+    window.history.replaceState({}, '', url);
+    render();
+  }).catch(() => { alert('Could not connect. Check your internet and try again.'); });
+}
+
+function leaveSession() {
+  if (session.listener && session.ref) session.ref.child('state').off('value', session.listener);
+  session.id = null;
+  session.ref = null;
+  session.listener = null;
+  session.isRemoteUpdate = false;
+  localStorage.removeItem('pickup-queue-session');
+  const url = new URL(window.location);
+  url.searchParams.delete('session');
+  window.history.replaceState({}, '', url);
+  render();
+}
+
+function shareSession() {
+  if (!session.id) return;
+  const url = new URL(window.location);
+  url.searchParams.set('session', session.id);
+  navigator.clipboard.writeText(url.toString()).then(() => {
+    showBottomToast('✓ Session link copied!', '#3b82f6');
+  }).catch(() => {
+    prompt('Share this link:', url.toString());
+  });
+}
+
+function promptJoinSession() {
+  const code = prompt('Enter 6-character session code:');
+  if (code && code.trim()) joinSession(code);
+}
+
+// Auto-join from URL param or saved session
+function autoJoinSession() {
+  if (!firebaseReady) return;
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlSession = urlParams.get('session');
+  const savedSession = localStorage.getItem('pickup-queue-session');
+  const sessionId = urlSession || savedSession;
+  if (sessionId) joinSession(sessionId);
+}
+
 const PLAYERS_PER_GAME = 10;
 const GAME_DURATION = 16 * 60; // 16 minutes in seconds
 
@@ -129,6 +365,7 @@ function saveState() {
       timer: state.timer,
     }));
   } catch(e) {}
+  syncToFirebase();
 }
 
 function getPriority(p) {
@@ -459,10 +696,11 @@ function startTimer() {
       state.timer = 0;
       stopTimer();
       try { navigator.vibrate && navigator.vibrate([200, 100, 200]); } catch(e) {}
+      saveState();
     }
-    saveState();
     renderTimer();
   }, 1000);
+  saveState();
 }
 
 function stopTimer() {
@@ -472,8 +710,12 @@ function stopTimer() {
 
 function toggleTimer() {
   if (!state.gameInProgress) return;
-  if (state.timerRunning) stopTimer();
-  else startTimer();
+  if (state.timerRunning) {
+    stopTimer();
+    saveState();
+  } else {
+    startTimer();
+  }
   render();
 }
 
@@ -537,7 +779,30 @@ function render() {
       <div style="font-size:32px;margin-bottom:4px">🏀</div>
       <h1>Pickup Queue</h1>
       <p>Fair rotation — longest wait = next up</p>
-    </div>
+    </div>`;
+
+  // Session bar
+  if (firebaseReady) {
+    if (session.id) {
+      const syncClass = session.connected ? 'live' : 'reconnecting';
+      const syncText = session.connected ? 'Live Sync' : 'Reconnecting...';
+      const syncDot = session.connected ? '🟢' : '🟡';
+      html += `<div class="session-bar">
+        <span class="sync-badge ${syncClass}">${syncDot} ${syncText}</span>
+        <span class="session-code">${esc(session.id)}</span>
+        <span style="flex:1"></span>
+        <button onclick="shareSession()">Share</button>
+        <button class="danger" onclick="leaveSession()">Leave</button>
+      </div>`;
+    } else {
+      html += `<div class="session-bar">
+        <button class="primary" onclick="createSession()">Start Live Sync</button>
+        <button onclick="promptJoinSession()">Join Session</button>
+      </div>`;
+    }
+  }
+
+  html += `
     <div class="stats">
       <div class="stat"><div class="stat-val" style="color:#3b82f6">${active.length}</div><div class="stat-label">Players</div></div>
       <div class="stat"><div class="stat-val" style="color:#f59e0b">${state.gameNumber || '—'}</div><div class="stat-label">Game</div></div>
@@ -852,6 +1117,7 @@ function copyQueue() {
 
 initDrag();
 render();
+autoJoinSession();
 </script>
 </body>
 </html>
