@@ -94,6 +94,15 @@
 <body>
 <div id="app"></div>
 <script>
+// Session state
+const session = {
+  id: null,
+  ref: null,
+  listener: null,
+  isRemoteUpdate: false,
+  connected: false,
+};
+
 // Firebase initialization (graceful degradation if CDN fails)
 let db = null;
 let firebaseReady = false;
@@ -120,15 +129,6 @@ if (typeof firebase !== 'undefined') {
     });
   } catch(e) { firebaseReady = false; }
 }
-
-// Session state
-const session = {
-  id: null,
-  ref: null,
-  listener: null,
-  isRemoteUpdate: false,
-  connected: false,
-};
 
 function generateSessionId() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -278,7 +278,7 @@ function joinSession(id) {
     url.searchParams.set('session', id);
     window.history.replaceState({}, '', url);
     render();
-  }).catch(() => { alert('Could not connect. Check your internet and try again.'); });
+  }).catch(err => { console.error('joinSession error:', err); alert('Could not connect. Check your internet and try again.'); });
 }
 
 function leaveSession() {
