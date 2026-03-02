@@ -339,7 +339,7 @@ function onDragMove(e) {
     if (drag.fromIndex < i && dragCenterY > rowMidY) {
       newIndex = i;
     } else if (drag.fromIndex > i && dragCenterY < rowMidY) {
-      newIndex = i;
+      newIndex = Math.min(newIndex, i);
     }
   });
   drag.currentIndex = newIndex;
