@@ -139,7 +139,23 @@ const session = {
   listener: null,
   isRemoteUpdate: false,
   connected: false,
+  viewerMode: false,
 };
+
+function isReadOnly() { return !!session.viewerMode; }
+
+function encodeViewerToken(id) {
+  try { return btoa(id + ':v'); } catch(e) { return id; }
+}
+
+function decodeViewerToken(token) {
+  try {
+    const decoded = atob(token);
+    const parts = decoded.split(':');
+    if (parts.length === 2 && parts[1] === 'v' && parts[0].length === 6) return parts[0].toUpperCase();
+  } catch(e) {}
+  return null;
+}
 
 let db = null;
 let firebaseReady = false;
@@ -185,7 +201,7 @@ function ensureArray(val) {
 
 let syncTimeout = null;
 function syncToFirebase() {
-  if (!session.id || !session.ref || session.isRemoteUpdate) return;
+  if (!session.id || !session.ref || session.isRemoteUpdate || session.viewerMode) return;
   clearTimeout(syncTimeout);
   syncTimeout = setTimeout(() => {
     session.ref.child('state').set({
@@ -253,6 +269,7 @@ function createSession() {
     const ref = db.ref('sessions/' + id);
     session.id = id;
     session.ref = ref;
+    session.viewerMode = false;
     ref.child('state').set({
       numCourts: state.numCourts,
       players: state.players,
@@ -265,13 +282,14 @@ function createSession() {
     session.listener = ref.child('state').on('value', onRemoteState);
     localStorage.setItem('pickle-queue-session', id);
     const url = new URL(window.location);
+    url.searchParams.delete('v');
     url.searchParams.set('session', id);
     window.history.replaceState({}, '', url);
     render();
   }).catch(() => alert('Live sync unavailable — sign-in failed.'));
 }
 
-function joinSession(id) {
+function joinSession(id, viewerMode) {
   if (!firebaseReady) { alert('Live sync unavailable — could not load Firebase.'); return; }
   id = id.trim().toUpperCase();
   if (id.length !== 6) { alert('Session code must be 6 characters.'); return; }
@@ -282,10 +300,17 @@ function joinSession(id) {
       if (session.listener && session.ref) session.ref.child('state').off('value', session.listener);
       session.id = id;
       session.ref = ref;
+      session.viewerMode = !!viewerMode;
       session.listener = ref.child('state').on('value', onRemoteState);
-      localStorage.setItem('pickle-queue-session', id);
+      localStorage.setItem('pickle-queue-session', (viewerMode ? 'V:' : '') + id);
       const url = new URL(window.location);
-      url.searchParams.set('session', id);
+      if (viewerMode) {
+        url.searchParams.delete('session');
+        url.searchParams.set('v', encodeViewerToken(id));
+      } else {
+        url.searchParams.delete('v');
+        url.searchParams.set('session', id);
+      }
       window.history.replaceState({}, '', url);
       render();
     });
@@ -298,36 +323,60 @@ function leaveSession() {
   session.ref = null;
   session.listener = null;
   session.isRemoteUpdate = false;
+  session.viewerMode = false;
   localStorage.removeItem('pickle-queue-session');
   const url = new URL(window.location);
   url.searchParams.delete('session');
+  url.searchParams.delete('v');
   window.history.replaceState({}, '', url);
   render();
 }
 
-function shareSession() {
+function shareSession(btn) {
   if (!session.id) return;
   const url = new URL(window.location);
-  url.searchParams.set('session', session.id);
+  url.searchParams.delete('session');
+  url.searchParams.set('v', encodeViewerToken(session.id));
+  const flashButton = (label, color) => {
+    if (!btn) return;
+    const origText = btn.textContent;
+    const origStyle = btn.getAttribute('style') || '';
+    btn.textContent = label;
+    btn.setAttribute('style', `${origStyle};border-color:${color};color:${color};background:${color}22;transition:all 0.15s`);
+    clearTimeout(btn._flashTimer);
+    btn._flashTimer = setTimeout(() => {
+      btn.textContent = origText;
+      btn.setAttribute('style', origStyle);
+    }, 1500);
+  };
   navigator.clipboard.writeText(url.toString()).then(() => {
-    showBottomToast('✓ Session link copied!', '#22c55e');
+    flashButton('✓ Copied!', '#22c55e');
+    showBottomToast('✓ View-only link copied!', '#22c55e');
   }).catch(() => {
-    prompt('Share this link:', url.toString());
+    prompt('Share this view-only link:', url.toString());
   });
 }
 
 function promptJoinSession() {
   const code = prompt('Enter 6-character session code:');
-  if (code && code.trim()) joinSession(code);
+  if (code && code.trim()) joinSession(code, false);
 }
 
 function autoJoinSession() {
   if (!firebaseReady) return;
   const urlParams = new URLSearchParams(window.location.search);
+  const viewerToken = urlParams.get('v');
+  if (viewerToken) {
+    const decoded = decodeViewerToken(viewerToken);
+    if (decoded) { joinSession(decoded, true); return; }
+  }
   const urlSession = urlParams.get('session');
-  const savedSession = localStorage.getItem('pickle-queue-session');
-  const sessionId = urlSession || savedSession;
-  if (sessionId) joinSession(sessionId);
+  if (urlSession) { joinSession(urlSession, false); return; }
+  const saved = localStorage.getItem('pickle-queue-session');
+  if (saved) {
+    if (saved.startsWith('V:')) joinSession(saved.slice(2), true);
+    else joinSession(saved, false);
+  }
 }
 
 const PLAYERS_PER_COURT = 4;
@@ -851,10 +900,13 @@ function playerRowHTML(p, opts = {}) {
 
   let onclick = '';
   let cursor = '';
-  if (state.swapMode && status !== 'playing') { onclick = `onclick="handleSwapTap(${p.id})"`; cursor = 'cursor:pointer;'; }
-  else if (state.pairMode) { onclick = `onclick="handlePairTap(${p.id})"`; cursor = 'cursor:pointer;'; }
+  if (!isReadOnly()) {
+    if (state.swapMode && status !== 'playing') { onclick = `onclick="handleSwapTap(${p.id})"`; cursor = 'cursor:pointer;'; }
+    else if (state.pairMode) { onclick = `onclick="handlePairTap(${p.id})"`; cursor = 'cursor:pointer;'; }
+  }
 
   const rankHTML = rank ? `<div class="rank${isNextUp ? ' highlight' : ''}">${rank}</div>` : '';
+  const removeBtn = isReadOnly() ? '' : `<button class="remove-btn" onclick="event.stopPropagation();removePlayer(${p.id})" title="Remove">×</button>`;
 
   return `
     <div class="player-row ${rowClass}" ${onclick} style="${cursor}">
@@ -863,19 +915,23 @@ function playerRowHTML(p, opts = {}) {
         <div class="player-name ${status === 'playing' ? 'playing' : ''}">${esc(p.name)}</div>
         <div class="player-meta">${meta}</div>
       </div>
-      <button class="remove-btn" onclick="event.stopPropagation();removePlayer(${p.id})" title="Remove">×</button>
+      ${removeBtn}
     </div>`;
 }
 
 function teamPlayerHTML(p, courtId) {
+  const readOnly = isReadOnly();
+  const court = state.courts[courtId];
+  const inSetup = court && court.status === 'setup';
   const isSelected = state.teamSwap.courtId === courtId && state.teamSwap.playerId === p.id;
-  const cls = 'team-player swap-target' + (isSelected ? ' swap-selected' : '');
+  const cls = 'team-player' + ((!readOnly && inSetup) ? ' swap-target' : '') + (isSelected ? ' swap-selected' : '');
   const partner = getPartner(p.id);
-  const partnerInTeam = partner != null && [...state.courts[courtId].teamA, ...state.courts[courtId].teamB].includes(partner);
+  const partnerInTeam = partner != null && [...court.teamA, ...court.teamB].includes(partner);
   const pairTag = partnerInTeam ? ` <span class="tag-pair" style="font-size:11px">🤝</span>` : '';
   const tag = p.lastResult === 'W' ? ` <span class="tag-w" style="font-size:11px">W</span>` :
               p.lastResult === 'L' ? ` <span class="tag-l" style="font-size:11px">L</span>` : '';
-  return `<div class="${cls}" onclick="pickTeamSwap(${courtId}, ${p.id})"><span>${esc(p.name)}${pairTag}${tag}</span></div>`;
+  const onclick = readOnly ? '' : `onclick="pickTeamSwap(${courtId}, ${p.id})"`;
+  return `<div class="${cls}" ${onclick}><span>${esc(p.name)}${pairTag}${tag}</span></div>`;
 }
 
 function courtCardHTML(court) {
@@ -883,9 +939,12 @@ function courtCardHTML(court) {
   const statusLabel = status === 'idle' ? 'Idle' : status === 'setup' ? 'Setting up' : 'Playing';
   let body = '';
 
+  const readOnly = isReadOnly();
   if (status === 'idle') {
     const waiting = getWaitingPlayers();
-    if (waiting.length < PLAYERS_PER_COURT) {
+    if (readOnly) {
+      body = `<div class="court-empty">Idle</div>`;
+    } else if (waiting.length < PLAYERS_PER_COURT) {
       body = `<div class="court-empty">Waiting for ${PLAYERS_PER_COURT - waiting.length} more player${waiting.length === PLAYERS_PER_COURT - 1 ? '' : 's'}</div>`;
     } else {
       body = `<button class="game-btn start" style="margin-bottom:0" onclick="setupCourt(${court.id})">🥒 Start Game on Court ${court.id + 1}</button>`;
@@ -901,7 +960,7 @@ function courtCardHTML(court) {
     teamB.forEach(p => { body += teamPlayerHTML(p, court.id); });
     body += `</div>`;
 
-    if (status === 'setup') {
+    if (status === 'setup' && !readOnly) {
       if (state.teamSwap.courtId === court.id && state.teamSwap.playerId != null) {
         body += `<div class="swap-banner" style="margin-bottom:8px;margin-top:8px">Tap a player on the other team to swap</div>`;
       } else {
@@ -912,7 +971,7 @@ function courtCardHTML(court) {
         <button class="court-btn regen" onclick="regenerateTeams(${court.id})">🔀 Reshuffle</button>
         <button class="court-btn start" onclick="startCourtGame(${court.id})">Start</button>
       </div>`;
-    } else {
+    } else if (status === 'playing' && !readOnly) {
       body += `<div class="court-actions">
         <button class="court-btn win-a" onclick="endCourtGame(${court.id}, 'A')">Team A Won</button>
         <button class="court-btn win-b" onclick="endCourtGame(${court.id}, 'B')">Team B Won</button>
@@ -935,13 +994,21 @@ function sessionBarHTML() {
   if (!firebaseReady) return '';
   if (session.id) {
     const syncClass = session.connected ? 'live' : 'reconnecting';
-    const syncText = session.connected ? 'Live Sync' : 'Reconnecting...';
-    const syncDot = session.connected ? '🟢' : '🟡';
+    const dot = session.connected ? '🟢' : '🟡';
+    if (session.viewerMode) {
+      const text = session.connected ? 'Viewing' : 'Reconnecting...';
+      return `<div class="session-bar">
+        <span class="sync-badge ${syncClass}">👁 ${text}</span>
+        <span style="flex:1"></span>
+        <button class="danger" onclick="leaveSession()">Leave</button>
+      </div>`;
+    }
+    const text = session.connected ? 'Live Sync' : 'Reconnecting...';
     return `<div class="session-bar">
-      <span class="sync-badge ${syncClass}">${syncDot} ${syncText}</span>
+      <span class="sync-badge ${syncClass}">${dot} ${text}</span>
       <span class="session-code">${esc(session.id)}</span>
       <span style="flex:1"></span>
-      <button onclick="shareSession()">Share</button>
+      <button onclick="shareSession(this)" title="Copy view-only link to share">Share view link</button>
       <button class="danger" onclick="leaveSession()">Leave</button>
     </div>`;
   }
@@ -954,8 +1021,21 @@ function sessionBarHTML() {
 function render() {
   const app = document.getElementById('app');
 
+  const readOnly = isReadOnly();
+
   // Setup screen if courts not chosen
   if (state.numCourts == null) {
+    const setupCard = readOnly
+      ? `<div class="setup-card"><h2>Waiting for host…</h2><p>The host hasn't picked the number of courts yet.</p></div>`
+      : `<div class="setup-card">
+          <h2>How many courts today?</h2>
+          <p>Pick at session start — you can't change this mid-session.</p>
+          <div class="court-pick">
+            <button onclick="chooseCourts(1)">1</button>
+            <button onclick="chooseCourts(2)">2</button>
+            <button onclick="chooseCourts(3)">3</button>
+          </div>
+        </div>`;
     app.innerHTML = `
       <div class="header">
         <div style="font-size:32px;margin-bottom:4px">🥒</div>
@@ -963,15 +1043,7 @@ function render() {
         <p>Doubles rotation · multi-court · stacking-style mixing</p>
       </div>
       ${sessionBarHTML()}
-      <div class="setup-card">
-        <h2>How many courts today?</h2>
-        <p>Pick at session start — you can't change this mid-session.</p>
-        <div class="court-pick">
-          <button onclick="chooseCourts(1)">1</button>
-          <button onclick="chooseCourts(2)">2</button>
-          <button onclick="chooseCourts(3)">3</button>
-        </div>
-      </div>
+      ${setupCard}
     `;
     return;
   }
@@ -995,26 +1067,31 @@ function render() {
       <div class="stat"><div class="stat-val" style="color:#f59e0b">${state.gameNumber || '—'}</div><div class="stat-label">Games</div></div>
       <div class="stat"><div class="stat-val" style="color:#ef4444">${waiting.length}</div><div class="stat-label">Waiting</div></div>
     </div>
-    <div class="add-row">
-      <input id="name-input" placeholder="Add player name..." onkeydown="if(event.key==='Enter'){addPlayer(this.value);}" />
-      <button onmousedown="event.preventDefault()" onclick="const i=document.getElementById('name-input');addPlayer(i.value);">Add</button>
-    </div>
-    <div id="add-toast" style="text-align:center;font-size:13px;margin:-12px 0 12px;opacity:0;transition:opacity 0.3s;height:20px"></div>
   `;
 
-  // Edit / Swap / Pair bar
-  if (active.length > 1) {
-    html += `<div class="edit-bar">
-      <button class="${state.editMode && !state.swapMode && !state.pairMode ? 'active' : ''}" onclick="toggleEditMode()">✏️ ${state.editMode ? 'Done' : 'Edit'}</button>
-      <button class="${state.swapMode ? 'swap-active' : ''}" onclick="${state.editMode ? 'toggleSwapMode()' : 'state.editMode=true;toggleSwapMode();'}">🔄 Swap Order</button>
-      <button class="${state.pairMode ? 'pair-active' : ''}" onclick="${state.editMode ? 'togglePairMode()' : 'state.editMode=true;togglePairMode();'}">🤝 Pair</button>
-    </div>`;
-  }
-  if (state.swapMode) {
-    html += `<div class="swap-banner">${state.swapFirst ? 'Now tap the second player to swap with' : 'Tap the first player to swap'}</div>`;
-  }
-  if (state.pairMode) {
-    html += `<div class="pair-banner">${state.pairFirst ? 'Now tap their partner. Tap a paired player alone to break the pair.' : 'Tap a player to start pairing. Tap a paired player to unpair.'}</div>`;
+  if (!readOnly) {
+    html += `
+      <div class="add-row">
+        <input id="name-input" placeholder="Add player name..." onkeydown="if(event.key==='Enter'){addPlayer(this.value);}" />
+        <button onmousedown="event.preventDefault()" onclick="const i=document.getElementById('name-input');addPlayer(i.value);">Add</button>
+      </div>
+      <div id="add-toast" style="text-align:center;font-size:13px;margin:-12px 0 12px;opacity:0;transition:opacity 0.3s;height:20px"></div>
+    `;
+
+    // Edit / Swap / Pair bar
+    if (active.length > 1) {
+      html += `<div class="edit-bar">
+        <button class="${state.editMode && !state.swapMode && !state.pairMode ? 'active' : ''}" onclick="toggleEditMode()">✏️ ${state.editMode ? 'Done' : 'Edit'}</button>
+        <button class="${state.swapMode ? 'swap-active' : ''}" onclick="${state.editMode ? 'toggleSwapMode()' : 'state.editMode=true;toggleSwapMode();'}">🔄 Swap Order</button>
+        <button class="${state.pairMode ? 'pair-active' : ''}" onclick="${state.editMode ? 'togglePairMode()' : 'state.editMode=true;togglePairMode();'}">🤝 Pair</button>
+      </div>`;
+    }
+    if (state.swapMode) {
+      html += `<div class="swap-banner">${state.swapFirst ? 'Now tap the second player to swap with' : 'Tap the first player to swap'}</div>`;
+    }
+    if (state.pairMode) {
+      html += `<div class="pair-banner">${state.pairFirst ? 'Now tap their partner. Tap a paired player alone to break the pair.' : 'Tap a player to start pairing. Tap a paired player to unpair.'}</div>`;
+    }
   }
 
   // Courts
@@ -1036,7 +1113,8 @@ function render() {
   if (inactive.length > 0) {
     html += `<div class="section"><button class="section-header" onclick="document.getElementById('inactive-list').style.display=document.getElementById('inactive-list').style.display==='none'?'block':'none'">👋 Left <span class="count">(${inactive.length})</span></button><div id="inactive-list" style="display:none;margin-top:6px">`;
     inactive.forEach(p => {
-      html += `<div class="inactive-row"><span>${esc(p.name)}</span><button class="return-btn" onclick="reactivatePlayer(${p.id})">Return</button></div>`;
+      const returnBtn = readOnly ? '' : `<button class="return-btn" onclick="reactivatePlayer(${p.id})">Return</button>`;
+      html += `<div class="inactive-row"><span>${esc(p.name)}</span>${returnBtn}</div>`;
     });
     html += `</div></div>`;
   }
@@ -1061,19 +1139,27 @@ function render() {
     html += `</div>`;
   }
 
-  // Copy / export
+  // Copy buttons (read-only safe)
   html += `
     <div style="margin-top:24px;">
       <button onclick="copyQueue()" style="width:100%;padding:14px;border-radius:12px;border:1px solid #22c55e;background:#22c55e22;color:#22c55e;font-size:15px;font-weight:600;cursor:pointer;">📋 Copy Queue Summary</button>
       <button onclick="copyPlayerList()" style="width:100%;padding:14px;border-radius:12px;border:1px solid #3b82f6;background:#3b82f622;color:#3b82f6;font-size:15px;font-weight:600;cursor:pointer;margin-top:8px;">📝 Copy Player List</button>
       <div id="bottom-toast" style="text-align:center;font-size:13px;margin-top:8px;opacity:0;transition:opacity 0.3s;height:20px"></div>
     </div>
-    <div style="margin-top:12px;display:flex;gap:8px;">
-      <button onclick="exportTransferCode()" style="flex:1;padding:12px;border-radius:12px;border:1px solid #a855f7;background:#a855f722;color:#a855f7;font-size:14px;font-weight:600;cursor:pointer;">📤 Export</button>
-      <button onclick="showImportDialog()" style="flex:1;padding:12px;border-radius:12px;border:1px solid #a855f7;background:#a855f722;color:#a855f7;font-size:14px;font-weight:600;cursor:pointer;">📥 Import</button>
-    </div>
-    <div style="text-align:center;font-size:11px;color:#555;margin-top:6px;">Transfer queue to another phone</div>
-    <div style="margin-top:16px;text-align:center"><button onclick="resetAll()" style="background:none;border:1px solid #333;color:#555;border-radius:8px;padding:8px 16px;font-size:12px;cursor:pointer">Reset All</button></div>
+  `;
+
+  if (!readOnly) {
+    html += `
+      <div style="margin-top:12px;display:flex;gap:8px;">
+        <button onclick="exportTransferCode()" style="flex:1;padding:12px;border-radius:12px;border:1px solid #a855f7;background:#a855f722;color:#a855f7;font-size:14px;font-weight:600;cursor:pointer;">📤 Export</button>
+        <button onclick="showImportDialog()" style="flex:1;padding:12px;border-radius:12px;border:1px solid #a855f7;background:#a855f722;color:#a855f7;font-size:14px;font-weight:600;cursor:pointer;">📥 Import</button>
+      </div>
+      <div style="text-align:center;font-size:11px;color:#555;margin-top:6px;">Transfer queue to another phone</div>
+      <div style="margin-top:16px;text-align:center"><button onclick="resetAll()" style="background:none;border:1px solid #333;color:#555;border-radius:8px;padding:8px 16px;font-size:12px;cursor:pointer">Reset All</button></div>
+    `;
+  }
+
+  html += `
     <div class="info-box">
       <div class="title">How it works</div>
       <div class="desc">When a court frees up, the next 4 players (longest waited) get pulled. Teams auto-form to mix winners with losers and avoid pairing the same teammates twice in a row. Tap players to swap them between teams or hit Reshuffle to cycle through the 3 possible team splits. 🤝 Pair = mark two players (e.g. spouses) so the system tries to put them on the same team when both are near the front of the queue.</div>
